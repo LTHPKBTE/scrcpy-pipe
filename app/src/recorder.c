@@ -146,7 +146,21 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         return false;
     }
 
-    char *file_url = sc_str_concat("file:", recorder->filename);
+    char *file_url;
+#ifdef _WIN32
+    // Windows named pipe paths start with "\\.\pipe\"
+    // avio_open expects the raw device path, not a file: URL
+    static const char PIPE_PREFIX[] = "\\\\.\\pipe\\";
+    if (strncmp(recorder->filename, PIPE_PREFIX,
+                sizeof(PIPE_PREFIX) - 1) == 0) {
+        // It's a pipe, use the filename as-is
+        file_url = strdup(recorder->filename);
+    } else {
+        file_url = sc_str_concat("file:", recorder->filename);
+    }
+#else
+    file_url = sc_str_concat("file:", recorder->filename);
+#endif
     if (!file_url) {
         avformat_free_context(recorder->ctx);
         return false;

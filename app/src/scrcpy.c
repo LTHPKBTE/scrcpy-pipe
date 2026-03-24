@@ -54,6 +54,7 @@ struct scrcpy {
     struct sc_decoder video_decoder;
     struct sc_decoder audio_decoder;
     struct sc_recorder recorder;
+    struct sc_recorder recorder_pipe;
     struct sc_delay_buffer video_buffer;
 #ifdef HAVE_V4L2
     struct sc_v4l2_sink v4l2_sink;
@@ -400,6 +401,8 @@ scrcpy(struct scrcpy_options *options) {
     bool file_pusher_initialized = false;
     bool recorder_initialized = false;
     bool recorder_started = false;
+    bool recorder_pipe_initialized = false;
+    bool recorder_pipe_started = false;
 #ifdef HAVE_V4L2
     bool v4l2_sink_initialized = false;
 #endif
@@ -629,6 +632,33 @@ scrcpy(struct scrcpy_options *options) {
         if (options->audio) {
             sc_packet_source_add_sink(&s->audio_demuxer.packet_source,
                                       &s->recorder.audio_packet_sink);
+        }
+    }
+
+    if (options->record_pipe) {
+        static const struct sc_recorder_callbacks recorder_pipe_cbs = {
+            .on_ended = sc_recorder_on_ended,
+        };
+        if (!sc_recorder_init(&s->recorder_pipe, options->record_pipe,
+                              options->record_format, options->video,
+                              options->audio, options->record_orientation,
+                              &recorder_pipe_cbs, NULL)) {
+            goto end;
+        }
+        recorder_pipe_initialized = true;
+
+        if (!sc_recorder_start(&s->recorder_pipe)) {
+            goto end;
+        }
+        recorder_pipe_started = true;
+
+        if (options->video) {
+            sc_packet_source_add_sink(&s->video_demuxer.packet_source,
+                                      &s->recorder_pipe.video_packet_sink);
+        }
+        if (options->audio) {
+            sc_packet_source_add_sink(&s->audio_demuxer.packet_source,
+                                      &s->recorder_pipe.audio_packet_sink);
         }
     }
 
@@ -1051,6 +1081,13 @@ end:
     }
     if (recorder_initialized) {
         sc_recorder_destroy(&s->recorder);
+    }
+
+    if (recorder_pipe_started) {
+        sc_recorder_join(&s->recorder_pipe);
+    }
+    if (recorder_pipe_initialized) {
+        sc_recorder_destroy(&s->recorder_pipe);
     }
 
     if (file_pusher_initialized) {

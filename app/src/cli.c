@@ -114,6 +114,7 @@ enum {
     OPT_NO_VD_SYSTEM_DECORATIONS,
     OPT_NO_VD_DESTROY_CONTENT,
     OPT_DISPLAY_IME_POLICY,
+    OPT_RECORD_PIPE,
 };
 
 struct sc_option {
@@ -814,6 +815,14 @@ static const struct sc_option options[] = {
         .argdesc = "format",
         .text = "Force recording format (mp4, mkv, m4a, mka, opus, aac, flac "
                 "or wav).",
+    },
+    {
+        .longopt_id = OPT_RECORD_PIPE,
+        .longopt = "record-pipe",
+        .argdesc = "name",
+        .text = "Record to a Windows named pipe (\\\\.\\pipe\\name) for streaming "
+                "to ffmpeg. Forces MKV format. Can be used together with --record "
+                "for simultaneous file output.",
     },
     {
         .longopt_id = OPT_RECORD_ORIENTATION,
@@ -2402,6 +2411,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                     return false;
                 }
                 break;
+            case OPT_RECORD_PIPE:
+                opts->record_pipe = optarg;
+                break;
             case 'h':
                 args->help = true;
                 break;
@@ -2876,13 +2888,14 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
     }
 
     if (opts->video && !opts->video_playback && !opts->record_filename
-            && !v4l2) {
-        LOGI("No video playback, no recording, no V4L2 sink: video disabled");
+            && !opts->record_pipe && !v4l2) {
+        LOGI("No video playback, no recording, no pipe, no V4L2 sink: video disabled");
         opts->video = false;
     }
 
-    if (opts->audio && !opts->audio_playback && !opts->record_filename) {
-        LOGI("No audio playback, no recording: audio disabled");
+    if (opts->audio && !opts->audio_playback && !opts->record_filename
+            && !opts->record_pipe) {
+        LOGI("No audio playback, no recording, no pipe: audio disabled");
         opts->audio = false;
     }
 
@@ -3229,6 +3242,33 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         }
     }
 
+    if (opts->record_pipe) {
+        if (!opts->video && !opts->audio) {
+            LOGE("Video and audio disabled, nothing to record to pipe");
+            return false;
+        }
+
+        // Force MKV format for pipe streaming
+        if (opts->record_format && opts->record_format != SC_RECORD_FORMAT_MKV) {
+            LOGW("--record-pipe forces MKV format, ignoring --record-format=%s",
+                 sc_record_format_get_name(opts->record_format));
+        }
+        opts->record_format = SC_RECORD_FORMAT_MKV;
+
+        // Pipe recording orientation must be rotation-only (same as file)
+        if (opts->record_orientation != SC_ORIENTATION_0) {
+            if (sc_orientation_is_mirror(opts->record_orientation)) {
+                LOGE("Record orientation only supports rotation, not "
+                     "flipping: %s",
+                     sc_orientation_get_name(opts->record_orientation));
+                return false;
+            }
+        }
+
+        // Ensure codec compatibility with MKV (MKV supports all codecs)
+        // No additional checks needed.
+    }
+
     if (opts->audio_codec == SC_CODEC_FLAC && opts->audio_bit_rate) {
         LOGW("--audio-bit-rate is ignored for FLAC audio codec");
     }
@@ -3289,6 +3329,10 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         // Only report obvious errors.
         if (opts->record_filename) {
             LOGE("OTG mode: cannot record");
+            return false;
+        }
+        if (opts->record_pipe) {
+            LOGE("OTG mode: cannot record to pipe");
             return false;
         }
         if (opts->turn_screen_off) {
