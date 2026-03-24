@@ -39,6 +39,32 @@ sc_record_format_is_audio_only(enum sc_record_format fmt) {
         || fmt == SC_RECORD_FORMAT_WAV;
 }
 
+static inline const char *
+sc_record_format_get_name(enum sc_record_format fmt) {
+    switch (fmt) {
+        case SC_RECORD_FORMAT_AUTO:
+            return "auto";
+        case SC_RECORD_FORMAT_MP4:
+            return "mp4";
+        case SC_RECORD_FORMAT_MKV:
+            return "mkv";
+        case SC_RECORD_FORMAT_M4A:
+            return "m4a";
+        case SC_RECORD_FORMAT_MKA:
+            return "mka";
+        case SC_RECORD_FORMAT_OPUS:
+            return "opus";
+        case SC_RECORD_FORMAT_AAC:
+            return "aac";
+        case SC_RECORD_FORMAT_FLAC:
+            return "flac";
+        case SC_RECORD_FORMAT_WAV:
+            return "wav";
+        default:
+            return "(unknown)";
+    }
+}
+
 enum sc_codec {
     SC_CODEC_H264,
     SC_CODEC_H265,
