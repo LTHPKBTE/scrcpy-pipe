@@ -171,6 +171,58 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         return false;
     }
 
+#ifdef _WIN32
+    // If the path is a Windows named pipe, create the pipe and wait for a client
+    static const char PIPE_PREFIX[] = "\\\\.\\pipe\\";
+    if (strncmp(recorder->filename, PIPE_PREFIX,
+                sizeof(PIPE_PREFIX) - 1) == 0) {
+        HANDLE pipe_handle = INVALID_HANDLE_VALUE;
+        wchar_t wpath[MAX_PATH];
+        if (MultiByteToWideChar(CP_UTF8, 0, recorder->filename, -1,
+                                wpath, MAX_PATH) == 0) {
+            LOGE("Cannot convert pipe path to wide string");
+            free(file_url);
+            avformat_free_context(recorder->ctx);
+            return false;
+        }
+
+        pipe_handle = CreateNamedPipeW(
+            wpath,
+            PIPE_ACCESS_DUPLEX,                 // both read and write
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,                                  // single instance
+            65536,                              // output buffer size
+            65536,                              // input buffer size
+            0,                                  // default timeout
+            NULL                                // default security attributes
+        );
+        if (pipe_handle == INVALID_HANDLE_VALUE) {
+            DWORD err = GetLastError();
+            LOGE("CreateNamedPipe failed: 0x%08lx", err);
+            free(file_url);
+            avformat_free_context(recorder->ctx);
+            return false;
+        }
+
+        LOGI("Named pipe created, waiting for client connection...");
+        BOOL connected = ConnectNamedPipe(pipe_handle, NULL);
+        if (!connected) {
+            DWORD err = GetLastError();
+            // ERROR_PIPE_CONNECTED means a client connected between CreateNamedPipe and ConnectNamedPipe
+            if (err != ERROR_PIPE_CONNECTED) {
+                LOGE("ConnectNamedPipe failed: 0x%08lx", err);
+                CloseHandle(pipe_handle);
+                free(file_url);
+                avformat_free_context(recorder->ctx);
+                return false;
+            }
+        }
+        LOGI("Client connected to named pipe");
+        // Store the server handle to keep the pipe alive
+        recorder->pipe_handle = pipe_handle;
+    }
+#endif
+
     int ret = avio_open(&recorder->ctx->pb, file_url, AVIO_FLAG_WRITE);
     free(file_url);
     if (ret < 0) {
@@ -813,6 +865,10 @@ sc_recorder_init(struct sc_recorder *recorder, const char *filename,
 
     recorder->format = format;
 
+#ifdef _WIN32
+    recorder->pipe_handle = INVALID_HANDLE_VALUE;
+#endif
+
     assert(cbs && cbs->on_ended);
     recorder->cbs = cbs;
     recorder->cbs_userdata = cbs_userdata;
@@ -878,4 +934,10 @@ sc_recorder_destroy(struct sc_recorder *recorder) {
     sc_cond_destroy(&recorder->cond);
     sc_mutex_destroy(&recorder->mutex);
     free(recorder->filename);
+#ifdef _WIN32
+    if (recorder->pipe_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(recorder->pipe_handle);
+        recorder->pipe_handle = INVALID_HANDLE_VALUE;
+    }
+#endif
 }

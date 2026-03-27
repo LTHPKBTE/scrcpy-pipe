@@ -49,6 +49,31 @@ needs not end with a known extension):
 scrcpy --record=file --record-format=mkv
 ```
 
+## Windows named pipe streaming (Windows only)
+
+On Windows, you can stream the recording directly to a named pipe, which can be
+consumed by another process (e.g., `ffmpeg`) in real time. The pipe path must
+start with `\\.\pipe\`. The container format is forced to MKV (Matroska) because
+it is the only format that supports streaming of all codecs used by scrcpy.
+
+```
+scrcpy --record-pipe=\\.\pipe\scrcpy_out
+```
+
+You can combine `--record-pipe` with `--record` to simultaneously write to a
+pipe and a regular file.
+
+The pipe must be created before scrcpy starts; scrcpy will act as the server,
+wait for a client to connect, and then start streaming. A typical usage is to
+start `ffmpeg` in another terminal to read from the pipe:
+
+```
+ffmpeg -i \\.\pipe\scrcpy_out -c copy output.mkv
+```
+
+Note: The `--record-pipe` option automatically forces MKV format and ignores
+`--record-format` if specified (a warning is printed).
+
 
 ## Rotation
 

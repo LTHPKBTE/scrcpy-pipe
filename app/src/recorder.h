@@ -58,6 +58,10 @@ struct sc_recorder {
     struct sc_recorder_stream video_stream;
     struct sc_recorder_stream audio_stream;
 
+#ifdef _WIN32
+    HANDLE pipe_handle; // only used for Windows named pipe output
+#endif
+
     const struct sc_recorder_callbacks *cbs;
     void *cbs_userdata;
 };
