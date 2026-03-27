@@ -8,6 +8,11 @@
 #include <libavformat/avformat.h>
 #include <libavutil/time.h>
 #include <libavutil/display.h>
+#include <libavutil/error.h>
+
+#ifdef _WIN32
+# include <windows.h>
+#endif
 
 #include "util/log.h"
 #include "util/str.h"
@@ -169,7 +174,16 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
     int ret = avio_open(&recorder->ctx->pb, file_url, AVIO_FLAG_WRITE);
     free(file_url);
     if (ret < 0) {
-        LOGE("Failed to open output file: %s", recorder->filename);
+        char error_buf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, error_buf, sizeof(error_buf));
+#ifdef _WIN32
+        DWORD win_err = GetLastError();
+        LOGE("Failed to open output file: %s (FFmpeg: %s, Windows: 0x%08lx)",
+             recorder->filename, error_buf, win_err);
+#else
+        LOGE("Failed to open output file: %s (%s)", recorder->filename,
+             error_buf);
+#endif
         avformat_free_context(recorder->ctx);
         return false;
     }
