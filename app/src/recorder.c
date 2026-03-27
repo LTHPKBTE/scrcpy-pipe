@@ -151,43 +151,38 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         return false;
     }
 
-    char *file_url;
+    char *file_url = NULL;
+    bool is_pipe = false;
 #ifdef _WIN32
-    // Windows named pipe paths start with "\\.\pipe\"
-    // avio_open expects the raw device path, not a file: URL
     static const char PIPE_PREFIX[] = "\\\\.\\pipe\\";
     if (strncmp(recorder->filename, PIPE_PREFIX,
                 sizeof(PIPE_PREFIX) - 1) == 0) {
-        // It's a pipe, use the filename as-is
-        file_url = strdup(recorder->filename);
-    } else {
-        file_url = sc_str_concat("file:", recorder->filename);
+        is_pipe = true;
     }
-#else
-    file_url = sc_str_concat("file:", recorder->filename);
 #endif
-    if (!file_url) {
-        avformat_free_context(recorder->ctx);
-        return false;
+
+    if (!is_pipe) {
+        file_url = sc_str_concat("file:", recorder->filename);
+        if (!file_url) {
+            avformat_free_context(recorder->ctx);
+            return false;
+        }
     }
 
 #ifdef _WIN32
-    // If the path is a Windows named pipe, create the pipe and wait for a client
-    if (strncmp(recorder->filename, PIPE_PREFIX,
-                sizeof(PIPE_PREFIX) - 1) == 0) {
+    if (is_pipe) {
         HANDLE pipe_handle = INVALID_HANDLE_VALUE;
         wchar_t wpath[MAX_PATH];
         if (MultiByteToWideChar(CP_UTF8, 0, recorder->filename, -1,
                                 wpath, MAX_PATH) == 0) {
             LOGE("Cannot convert pipe path to wide string");
-            free(file_url);
             avformat_free_context(recorder->ctx);
             return false;
         }
 
         pipe_handle = CreateNamedPipeW(
             wpath,
-            PIPE_ACCESS_DUPLEX,                 // both read and write
+            PIPE_ACCESS_OUTBOUND,               // we only write to the pipe
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1,                                  // single instance
             65536,                              // output buffer size
@@ -198,12 +193,14 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         if (pipe_handle == INVALID_HANDLE_VALUE) {
             DWORD err = GetLastError();
             LOGE("CreateNamedPipe failed: 0x%08lx", err);
-            free(file_url);
             avformat_free_context(recorder->ctx);
             return false;
         }
 
         LOGI("Named pipe created, waiting for client connection...");
+        // Store the server handle to keep the pipe alive
+        recorder->pipe_handle = pipe_handle;
+        // Wait for a client (ffmpeg) to connect before avio_open
         BOOL connected = ConnectNamedPipe(pipe_handle, NULL);
         if (!connected) {
             DWORD err = GetLastError();
@@ -211,17 +208,43 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
             if (err != ERROR_PIPE_CONNECTED) {
                 LOGE("ConnectNamedPipe failed: 0x%08lx", err);
                 CloseHandle(pipe_handle);
-                free(file_url);
                 avformat_free_context(recorder->ctx);
                 return false;
             }
         }
         LOGI("Client connected to named pipe");
-        // Store the server handle to keep the pipe alive
-        recorder->pipe_handle = pipe_handle;
+
+        // Convert pipe handle to a file descriptor for avio_open_fd
+        int fd = _open_osfhandle((intptr_t) pipe_handle, _O_WRONLY | _O_BINARY);
+        if (fd == -1) {
+            LOGE("Cannot convert pipe handle to file descriptor");
+            CloseHandle(pipe_handle);
+            avformat_free_context(recorder->ctx);
+            return false;
+        }
+        // avio_open_fd takes ownership of the fd, so we must not close it ourselves
+        int ret = avio_open_fd(&recorder->ctx->pb, fd, AVIO_FLAG_WRITE);
+        if (ret < 0) {
+            char error_buf[AV_ERROR_MAX_STRING_SIZE];
+            av_strerror(ret, error_buf, sizeof(error_buf));
+            LOGE("Failed to open pipe via fd: %s (FFmpeg: %s)",
+                 recorder->filename, error_buf);
+            _close(fd); // still need to close because avio_open_fd failed
+            CloseHandle(pipe_handle);
+            avformat_free_context(recorder->ctx);
+            return false;
+        }
+        // Success: pipe is now opened via fd, no need for file_url
+        goto skip_avio_open;
     }
 #endif
 
+    // Regular file path
+    if (!file_url) {
+        // should not happen
+        avformat_free_context(recorder->ctx);
+        return false;
+    }
     int ret = avio_open(&recorder->ctx->pb, file_url, AVIO_FLAG_WRITE);
     free(file_url);
     if (ret < 0) {
@@ -239,6 +262,7 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         return false;
     }
 
+skip_avio_open:
     // contrary to the deprecated API (av_oformat_next()), av_muxer_iterate()
     // returns (on purpose) a pointer-to-const, but AVFormatContext.oformat
     // still expects a pointer-to-non-const (it has not be updated accordingly)
