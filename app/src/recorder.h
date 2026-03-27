@@ -3,6 +3,10 @@
 
 #include "common.h"
 
+#ifdef _WIN32
+# include <windows.h>
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <libavcodec/packet.h>

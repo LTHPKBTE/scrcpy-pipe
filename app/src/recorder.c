@@ -173,7 +173,6 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
 
 #ifdef _WIN32
     // If the path is a Windows named pipe, create the pipe and wait for a client
-    static const char PIPE_PREFIX[] = "\\\\.\\pipe\\";
     if (strncmp(recorder->filename, PIPE_PREFIX,
                 sizeof(PIPE_PREFIX) - 1) == 0) {
         HANDLE pipe_handle = INVALID_HANDLE_VALUE;
