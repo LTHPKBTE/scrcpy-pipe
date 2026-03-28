@@ -12,6 +12,8 @@
 
 #ifdef _WIN32
 # include <windows.h>
+# include <io.h>
+# include <fcntl.h>
 #endif
 
 #include "util/log.h"
