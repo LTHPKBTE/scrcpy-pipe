@@ -216,28 +216,47 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         }
         LOGI("Client connected to named pipe");
 
-        // For Windows named pipes, we can use avio_open directly with the pipe path
-        // Format: "file:\\.\pipe\pipename"
-        char *pipe_url = sc_str_concat("file:", recorder->filename);
-        if (!pipe_url) {
+        // For Windows named pipes, we need to create a custom AVIOContext
+        // since avio_open may not support Windows named pipes directly
+        
+        // Create a custom AVIOContext that writes to the pipe handle
+        unsigned char *buffer = av_malloc(32768);
+        if (!buffer) {
             LOG_OOM();
             CloseHandle(pipe_handle);
             avformat_free_context(recorder->ctx);
             return false;
         }
         
-        int ret = avio_open(&recorder->ctx->pb, pipe_url, AVIO_FLAG_WRITE);
-        free(pipe_url);
-        if (ret < 0) {
-            char error_buf[AV_ERROR_MAX_STRING_SIZE];
-            av_strerror(ret, error_buf, sizeof(error_buf));
-            LOGE("Failed to open pipe via avio_open: %s (FFmpeg: %s)",
-                 recorder->filename, error_buf);
+        // Custom write function for the pipe
+        static int pipe_write(void *opaque, uint8_t *buf, int buf_size) {
+            HANDLE hPipe = (HANDLE)opaque;
+            DWORD bytes_written;
+            
+            if (!WriteFile(hPipe, buf, buf_size, &bytes_written, NULL)) {
+                return AVERROR(EIO);
+            }
+            return bytes_written;
+        }
+        
+        static int64_t pipe_seek(void *opaque, int64_t offset, int whence) {
+            // Pipes are not seekable
+            return AVERROR(ESPIPE);
+        }
+        
+        recorder->ctx->pb = avio_alloc_context(
+            buffer, 32768, 1, (void*)pipe_handle, NULL, pipe_write, pipe_seek
+        );
+        
+        if (!recorder->ctx->pb) {
+            LOGE("Failed to allocate AVIOContext for pipe");
+            av_free(buffer);
             CloseHandle(pipe_handle);
             avformat_free_context(recorder->ctx);
             return false;
         }
-        // Success: pipe is now opened via avio_open
+        
+        // Success: pipe is now opened via custom AVIOContext
         // We need to keep the pipe handle open until recording is done
         recorder->pipe_handle = pipe_handle;
         goto skip_avio_open;
@@ -283,7 +302,13 @@ skip_avio_open:
 
 static void
 sc_recorder_close_output_file(struct sc_recorder *recorder) {
-    avio_close(recorder->ctx->pb);
+    if (recorder->ctx->pb) {
+        // For custom AVIOContext, we need to free it properly
+        if (recorder->ctx->pb->buffer) {
+            av_free(recorder->ctx->pb->buffer);
+        }
+        avio_context_free(&recorder->ctx->pb);
+    }
     avformat_free_context(recorder->ctx);
 }
 
