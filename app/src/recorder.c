@@ -216,27 +216,30 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
         }
         LOGI("Client connected to named pipe");
 
-        // Convert pipe handle to a file descriptor for avio_open_fd
-        int fd = _open_osfhandle((intptr_t) pipe_handle, _O_WRONLY | _O_BINARY);
-        if (fd == -1) {
-            LOGE("Cannot convert pipe handle to file descriptor");
+        // For Windows named pipes, we can use avio_open directly with the pipe path
+        // Format: "file:\\.\pipe\pipename"
+        char *pipe_url = sc_str_concat("file:", recorder->filename);
+        if (!pipe_url) {
+            LOG_OOM();
             CloseHandle(pipe_handle);
             avformat_free_context(recorder->ctx);
             return false;
         }
-        // avio_open_fd takes ownership of the fd, so we must not close it ourselves
-        int ret = avio_open_fd(&recorder->ctx->pb, fd, AVIO_FLAG_WRITE);
+        
+        int ret = avio_open(&recorder->ctx->pb, pipe_url, AVIO_FLAG_WRITE);
+        free(pipe_url);
         if (ret < 0) {
             char error_buf[AV_ERROR_MAX_STRING_SIZE];
             av_strerror(ret, error_buf, sizeof(error_buf));
-            LOGE("Failed to open pipe via fd: %s (FFmpeg: %s)",
+            LOGE("Failed to open pipe via avio_open: %s (FFmpeg: %s)",
                  recorder->filename, error_buf);
-            _close(fd); // still need to close because avio_open_fd failed
             CloseHandle(pipe_handle);
             avformat_free_context(recorder->ctx);
             return false;
         }
-        // Success: pipe is now opened via fd, no need for file_url
+        // Success: pipe is now opened via avio_open
+        // We need to keep the pipe handle open until recording is done
+        recorder->pipe_handle = pipe_handle;
         goto skip_avio_open;
     }
 #endif
