@@ -27,6 +27,27 @@
 
 static const AVRational SCRCPY_TIME_BASE = {1, 1000000}; // timestamps in us
 
+#ifdef _WIN32
+// Custom write function for Windows named pipes
+static int pipe_write(void *opaque, const uint8_t *buf, int buf_size) {
+    HANDLE hPipe = (HANDLE)opaque;
+    DWORD bytes_written;
+    
+    if (!WriteFile(hPipe, buf, buf_size, &bytes_written, NULL)) {
+        return AVERROR(EIO);
+    }
+    return (int)bytes_written;
+}
+
+static int64_t pipe_seek(void *opaque, int64_t offset, int whence) {
+    (void)opaque;
+    (void)offset;
+    (void)whence;
+    // Pipes are not seekable
+    return AVERROR(ESPIPE);
+}
+#endif
+
 static const AVOutputFormat *
 find_muxer(const char *name) {
 #ifdef SCRCPY_LAVF_HAS_NEW_MUXER_ITERATOR_API
@@ -226,22 +247,6 @@ sc_recorder_open_output_file(struct sc_recorder *recorder) {
             CloseHandle(pipe_handle);
             avformat_free_context(recorder->ctx);
             return false;
-        }
-        
-        // Custom write function for the pipe
-        static int pipe_write(void *opaque, uint8_t *buf, int buf_size) {
-            HANDLE hPipe = (HANDLE)opaque;
-            DWORD bytes_written;
-            
-            if (!WriteFile(hPipe, buf, buf_size, &bytes_written, NULL)) {
-                return AVERROR(EIO);
-            }
-            return bytes_written;
-        }
-        
-        static int64_t pipe_seek(void *opaque, int64_t offset, int whence) {
-            // Pipes are not seekable
-            return AVERROR(ESPIPE);
         }
         
         recorder->ctx->pb = avio_alloc_context(
